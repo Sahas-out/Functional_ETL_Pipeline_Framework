@@ -62,6 +62,8 @@ The system must support composable transformations such as:
 * `map`
 * `filter`
 * `reduce / aggregate`
+* `flat map`
+* `group by aggregate`
 
 These must:
 
@@ -118,7 +120,7 @@ The system must be designed such that:
 
   * Be stateless and independent
 
-Note: Actual parallel execution is optional, but the design must **enable it naturally**
+Note: Actual parallel execution is not required, but the design must **enable it naturally**
 
 ---
 
@@ -213,7 +215,7 @@ Extract → Transform → Transform → Load
 # 5. Non-Requirements (Clarifications)
 
 * Full-scale distributed system is **not required**
-* Heavy multithreading is **not required**
+* multithreading is **not required**
 * UI or frontend is **not required**
 
 ---
