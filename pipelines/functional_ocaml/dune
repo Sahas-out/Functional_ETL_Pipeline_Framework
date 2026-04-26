@@ -1,0 +1,12 @@
+(executable
+ (name main)
+ (modules
+  input_schema
+  extract_raw_csv_logs
+  parse_request_field
+  derive_date_and_hour
+  categorize_endpoint_type
+  aggregate_hourly
+  load_hourly_summary
+  main)
+ (libraries etl))

@@ -1,6 +1,7 @@
 # my files
 .env
 data/
+.venv
 # template
 *.annot
 *.cmo
