@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import gc
 
 from aggregate_hourly import run as aggregate_hourly
 from categorize_endpoint_type import run as categorize_endpoint_type
@@ -22,7 +23,13 @@ def run(input_file: str, output_file: str) -> None:
 
 
 if __name__ == "__main__":
+    gc.collect()
+    before = gc.get_stats()
+
     input_path = sys.argv[1] if len(sys.argv) > 1 else "data/nasa_aug95_c.csv"
     output_path = sys.argv[2] if len(sys.argv) > 2 else "data/hourly_summary_imperative.csv"
     run(input_path, output_path)
 
+    after = gc.get_stats()
+    print("GC Before:", before)
+    print("GC After:", after)

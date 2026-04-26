@@ -20,4 +20,9 @@ let () =
   let output_file =
     if Array.length Sys.argv > 2 then Sys.argv.(2) else "data/hourly_summary_functional.csv"
   in
-  run ~input_file ~output_file
+  let _ = run ~input_file ~output_file
+  in 
+  let s = Gc.stat () in
+    Printf.printf "Minor collections: %d\n" s.minor_collections;
+    Printf.printf "Major collections: %d\n" s.major_collections;
+    Printf.printf "Heap words: %d\n" s.heap_words;

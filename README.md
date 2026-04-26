@@ -40,3 +40,16 @@ Per current project direction, this implementation intentionally **excludes**:
 - `Specifications.md` — formal requirements
 - `Design.md` — design blueprint
 - `Implementation.md` — implementation details and module behavior
+
+## How to run pipelines and record metrics
+
+- functional pipeline 
+    `dune build 
+    dune exec ./pipelines/functional_ocaml/main.exe -- data/nasa_aug95_c.csv data/hourly_summary_functional.csv`
+    `to record metrics add /usr/bin/time -v before above command`
+
+
+- imperative pipeline
+    `source .venv/bin/activate`
+    `python3 pipelines/imperative_pandas/pipeline.py data/nasa_aug95_c.csv data/hourly_summary_imperative.csv`
+    `for cprofiling python3 -m cProfile pipelines/imperative_pandas/pipeline.py data/nasa_aug95_c.csv data/hourly_summary_imperative.csv`

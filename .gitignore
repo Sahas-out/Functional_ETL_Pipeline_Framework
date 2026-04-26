@@ -2,6 +2,9 @@
 .env
 data/
 .venv
+*.pyc
+*/__pycache__/
+
 # template
 *.annot
 *.cmo

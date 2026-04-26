@@ -1,0 +1,2 @@
+GC Before: [{'collections': 114, 'collected': 516, 'uncollectable': 0}, {'collections': 10, 'collected': 13, 'uncollectable': 0}, {'collections': 1, 'collected': 0, 'uncollectable': 0}]
+GC After: [{'collections': 2144, 'collected': 516, 'uncollectable': 0}, {'collections': 194, 'collected': 13, 'uncollectable': 0}, {'collections': 10, 'collected': 0, 'uncollectable': 0}]
