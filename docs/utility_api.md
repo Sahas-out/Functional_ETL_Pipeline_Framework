@@ -29,9 +29,9 @@ extract
   ~file:string
   ?delimiter:char
   ?has_header:bool
-  ~parser:(string array -> 'a)
+  ~parser:(string array -> ('a, string) result)
   unit
-  -> 'a Seq.t
+  -> ('a, string) result Seq.t
 ```
 
 ### Parameters
@@ -39,11 +39,11 @@ extract
 * `~file` : CSV file path
 * `?delimiter` : separator character (default `,`)
 * `?has_header` : skip first row (default `true`)
-* `~parser` : converts columns into desired type
+* `~parser` : converts columns into desired type or error
 
 ### Returns
 
-Lazy sequence of parsed rows.
+Lazy sequence of parsed rows where parser exceptions become `Error` values.
 
 ---
 
@@ -54,7 +54,7 @@ let rows =
   extract
     ~file:"users.csv"
     ~parser:(fun cols ->
-      (cols.(0), int_of_string cols.(1)))
+      Ok (cols.(0), int_of_string cols.(1)))
     ()
 ```
 
@@ -69,9 +69,17 @@ Bob,30
 Produces:
 
 ```ocaml id="ub5vxj"
-("Alice",25)
-("Bob",30)
+Ok ("Alice",25)
+Ok ("Bob",30)
 ```
+
+---
+
+## `extract_strict`
+
+Same signature as `extract`, but parser exceptions are re-raised.
+
+Use when you explicitly want fail-fast extraction behavior.
 
 ---
 
@@ -84,15 +92,15 @@ Utilities for processing sequences.
 ## `map`
 
 ```ocaml id="jlwmh8"
-map : ('a -> 'b) -> 'a Seq.t -> 'b Seq.t
+map : ('a -> 'b) -> ('a, 'e) result Seq.t -> ('b, 'e) result Seq.t
 ```
 
-Apply function to each row.
+Apply function to `Ok` rows and propagate `Error` rows unchanged.
 
 ### Example
 
 ```ocaml id="c2ef0w"
-Transform.map (fun (n,a) -> (n, a+1)) rows
+Transform.map (fun (n,a) -> (n, a+1)) result_rows
 ```
 
 ---
@@ -100,15 +108,15 @@ Transform.map (fun (n,a) -> (n, a+1)) rows
 ## `filter`
 
 ```ocaml id="ctnl7y"
-filter : ('a -> bool) -> 'a Seq.t -> 'a Seq.t
+filter : ('a -> bool) -> ('a, 'e) result Seq.t -> ('a, 'e) result Seq.t
 ```
 
-Keep matching rows only.
+Filter only `Ok` rows and propagate `Error` rows unchanged.
 
 ### Example
 
 ```ocaml id="s9o4vz"
-Transform.filter (fun (_,age) -> age >= 18) rows
+Transform.filter (fun (_,age) -> age >= 18) result_rows
 ```
 
 ---
@@ -116,15 +124,15 @@ Transform.filter (fun (_,age) -> age >= 18) rows
 ## `reduce`
 
 ```ocaml id="s05lff"
-reduce : ('acc -> 'a -> 'acc) -> 'acc -> 'a Seq.t -> 'acc
+reduce : ('acc -> 'a -> 'acc) -> 'acc -> ('a, 'e) result Seq.t -> ('acc, 'e) result
 ```
 
-Fold rows into one value.
+Fold `Ok` rows into one value. Returns `Error` immediately when an error row is encountered.
 
 ### Example
 
 ```ocaml id="9hajd0"
-Transform.reduce (fun sum (_,age) -> sum + age) 0 rows
+Transform.reduce (fun sum (_,age) -> sum + age) 0 result_rows
 ```
 
 ---
@@ -154,22 +162,62 @@ Produces:
 ## `flat_map`
 
 ```ocaml id="n7e7zj"
-flat_map : ('a -> 'b Seq.t) -> 'a Seq.t -> 'b Seq.t
+flat_map : ('a -> 'b Seq.t) -> ('a, 'e) result Seq.t -> ('b, 'e) result Seq.t
 ```
 
-One input row can produce many rows.
+One `Ok` row can produce many rows. `Error` rows pass through untouched.
 
 ### Example
 
 ```ocaml id="d6csgg"
-flat_map (fun x -> List.to_seq [x; x*10]) (List.to_seq [1;2])
+flat_map (fun x -> List.to_seq [x; x*10]) (List.to_seq [Ok 1; Error "bad"; Ok 2])
 ```
 
 Produces:
 
 ```ocaml id="3t37m0"
-1,10,2,20
+Ok 1, Ok 10, Error "bad", Ok 2, Ok 20
 ```
+
+---
+
+## `map_strict`
+
+```ocaml id="map-result"
+map_strict : ('a -> 'b) -> 'a Seq.t -> 'b Seq.t
+```
+
+Strict map on plain sequences (`'a Seq.t`).
+
+---
+
+## `filter_strict`
+
+```ocaml id="filter-result"
+filter_strict : ('a -> bool) -> 'a Seq.t -> 'a Seq.t
+```
+
+Strict filter on plain sequences (`'a Seq.t`).
+
+---
+
+## `flat_map_strict`
+
+```ocaml id="flat-map-result"
+flat_map_strict : ('a -> 'b Seq.t) -> 'a Seq.t -> 'b Seq.t
+```
+
+Strict flat_map on plain sequences (`'a Seq.t`).
+
+---
+
+## `reduce_strict`
+
+```ocaml id="reduce-strict"
+reduce_strict : ('acc -> 'a -> 'acc) -> 'acc -> 'a Seq.t -> 'acc
+```
+
+Strict reduce on plain sequences (`'a Seq.t`).
 
 ---
 
@@ -184,7 +232,7 @@ group_by_aggregate
   seq
 ```
 
-Group rows and aggregate values.
+Aggregate `Ok` rows by key and propagate `Error` rows unchanged.
 
 ### Example
 
@@ -194,8 +242,14 @@ group_by_aggregate
   ~init:0
   ~reduce:(fun total (_,sal) -> total + sal)
   ~emit:(fun dept total -> (dept,total))
-  rows
+  result_rows
 ```
+
+---
+
+## `group_by_aggregate_strict`
+
+Strict aggregation on plain sequences (`'a Seq.t`).
 
 ---
 
@@ -258,7 +312,7 @@ Bob,30
 let rows =
   Extractor.extract
     ~file:"users.csv"
-    ~parser:(fun c -> (c.(0), int_of_string c.(1)))
+    ~parser:(fun c -> Ok (c.(0), int_of_string c.(1)))
     ()
   |> Transform.filter (fun (_,age) -> age >= 18)
 ```
@@ -271,7 +325,7 @@ Then save transformed data using loader.
 
 | Module    | Behavior                              |
 | --------- | ------------------------------------- |
-| Extractor | Raises on parser/file errors          |
+| Extractor | `extract` returns `Error` rows; `extract_strict` raises parser exceptions |
 | Transform | User-defined (exceptions or `result`) |
 | Loader    | Raises on write errors                |
 
@@ -279,5 +333,4 @@ Then save transformed data using loader.
 
 # Recommended Usage Pattern
 
-Use `result` rows + `filter_ok` for robust ETL pipelines.
-
+Use `result` rows with default transforms; use `*_strict` only for plain streams.

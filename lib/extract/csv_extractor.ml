@@ -1,7 +1,7 @@
 let split_line ~delimiter line =
   String.split_on_char delimiter line |> Array.of_list
 
-let extract ~file ?(delimiter = ',') ?(has_header = true) ~parser () =
+let make_extractor ~strict_parser ~file ?(delimiter = ',') ?(has_header = true) ~parser () =
   let ic = open_in file in
   let closed = ref false in
   let close_input () =
@@ -14,11 +14,11 @@ let extract ~file ?(delimiter = ',') ?(has_header = true) ~parser () =
     | line ->
         let fields = split_line ~delimiter line in
         let parsed =
-          match parser fields with
-          | value -> value
-          | exception exn ->
+          try parser fields with
+          | exn when strict_parser ->
               close_input ();
               raise exn
+          | exn -> Error ("parser exception: " ^ Printexc.to_string exn)
         in
         Seq.Cons (parsed, stream)
     | exception End_of_file ->
@@ -35,3 +35,9 @@ let extract ~file ?(delimiter = ',') ?(has_header = true) ~parser () =
         close_input ();
         Seq.empty
   else stream
+
+let extract ~file ?delimiter ?has_header ~parser () =
+  make_extractor ~strict_parser:false ~file ?delimiter ?has_header ~parser ()
+
+let extract_strict ~file ?delimiter ?has_header ~parser () =
+  make_extractor ~strict_parser:true ~file ?delimiter ?has_header ~parser ()

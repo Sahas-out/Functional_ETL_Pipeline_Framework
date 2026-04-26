@@ -49,12 +49,13 @@ test/
 - Pipeline is modeled as `'a Seq.t`.
 - Composition uses function chaining (`compose`), and `run` forces evaluation.
 - Transform module is pure and stateless:
-  - `map`
-  - `filter`
+  - `map` (transforms `Ok`, passes `Error` through)
+  - `filter` (filters `Ok`, passes `Error` through)
   - `filter_ok`
-  - `flat_map`
-  - `reduce` (terminal, strict)
-  - `group_by_aggregate` (materialization barrier at grouping point)
+  - `flat_map` (expands `Ok`, passes `Error` through)
+  - `reduce` (terminal, returns `Error` on first error row)
+  - `group_by_aggregate` (materialization barrier; aggregates `Ok`, forwards `Error`)
+  - strict variants: `map_strict`, `filter_strict`, `flat_map_strict`, `reduce_strict`, `group_by_aggregate_strict`
 
 ## Extract and load boundaries
 
