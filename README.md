@@ -1,21 +1,30 @@
-# Functional ETL Pipeline
+# Functional ETL Pipeline (OCaml)
 
-Functional ETL framework in **OCaml** with a design centered on:
-- pure, composable transforms
-- lazy `Seq.t` streaming
-- immutable row operations
-- side-effect boundaries at extract/load layers
+## Resume-focused project summary
+
+Built a **functional ETL framework in OCaml** that demonstrates production-style data engineering design:
+
+- Designed a composable transformation engine with `map`, `filter`, `flat_map`, `reduce`, and grouped aggregation.
+- Implemented **lazy streaming ETL** using `Seq.t` to process CSV data without loading full datasets into memory.
+- Modeled rows and schema handling with immutable data structures and typed column access (GADT-based).
+- Kept side effects isolated to extract/load boundaries for maintainable, testable pipeline logic.
+- Added test coverage across core modules, pipeline composition, transforms, and CSV I/O behaviors.
+
+## Tech stack and concepts
+
+**Languages & tools:** OCaml, Dune, Python (for imperative baseline pipeline), CSV processing  
+**Concepts:** functional architecture, immutable data modeling, lazy evaluation, typed APIs, ETL design, test-driven module validation
 
 ## What is implemented
 
-Library modules are implemented under `lib/`:
+Library modules in `lib/`:
 
 - `core/`
   - `Row`: immutable row map utilities
   - `Column`: GADT-based typed access (`String`, `Int`, `Float`, `Bool`, `Option`)
-  - `Schema`: schema construction/validation helpers
+  - `Schema`: schema construction and validation helpers
 - `pipeline/`
-  - `Pipeline`: composition and run helpers
+  - `Pipeline`: composition and execution helpers
   - `Transform`: `map`, `filter`, `filter_ok`, `flat_map`, `reduce`, `group_by_aggregate`
 - `extract/`
   - generic extractor interface
@@ -26,30 +35,49 @@ Library modules are implemented under `lib/`:
 - `etl.ml`
   - top-level API re-exports
 
-Tests are added under `test/` for core modules, transforms, pipeline composition, and CSV I/O behavior.
+Tests are under `test/` for core modules, transforms, pipeline composition, and CSV I/O behavior.
 
-## Project scope for this implementation
+## Scope notes
 
 Per current project direction, this implementation intentionally **excludes**:
-1. building an end-to-end example pipeline in `examples/`
-2. imperative-vs-functional benchmark comparison
+1. End-to-end example pipeline under `examples/`
+2. Imperative-vs-functional benchmark comparison
+
+## How to run pipelines and capture metrics
+
+### Functional pipeline (OCaml)
+
+```bash
+dune build
+dune exec ./pipelines/functional_ocaml/main.exe -- \
+  data/nasa_aug95_c.csv data/hourly_summary_functional.csv
+```
+
+To capture runtime and memory metrics:
+
+```bash
+/usr/bin/time -v dune exec ./pipelines/functional_ocaml/main.exe -- \
+  data/nasa_aug95_c.csv data/hourly_summary_functional.csv
+```
+
+### Imperative pipeline (Python / Pandas baseline)
+
+```bash
+source .venv/bin/activate
+python3 pipelines/imperative_pandas/pipeline.py \
+  data/nasa_aug95_c.csv data/hourly_summary_imperative.csv
+```
+
+For profiling:
+
+```bash
+python3 -m cProfile pipelines/imperative_pandas/pipeline.py \
+  data/nasa_aug95_c.csv data/hourly_summary_imperative.csv
+```
 
 ## Repository contents
 
-- `ProblemStatement.md` — challenge statement
-- `Specifications.md` — formal requirements
-- `Design.md` — design blueprint
-- `Implementation.md` — implementation details and module behavior
-
-## How to run pipelines and record metrics
-
-- functional pipeline 
-    `dune build 
-    dune exec ./pipelines/functional_ocaml/main.exe -- data/nasa_aug95_c.csv data/hourly_summary_functional.csv`
-    `to record metrics add /usr/bin/time -v before above command`
-
-
-- imperative pipeline
-    `source .venv/bin/activate`
-    `python3 pipelines/imperative_pandas/pipeline.py data/nasa_aug95_c.csv data/hourly_summary_imperative.csv`
-    `for cprofiling python3 -m cProfile pipelines/imperative_pandas/pipeline.py data/nasa_aug95_c.csv data/hourly_summary_imperative.csv`
+- `docs/ProblemStatement.md` — challenge statement
+- `docs/Specifications.md` — formal requirements
+- `docs/Design.md` — design blueprint
+- `docs/Implementation.md` — implementation details and module behavior
