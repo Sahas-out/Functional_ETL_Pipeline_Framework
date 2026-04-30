@@ -1,6 +1,6 @@
 # Functional ETL Pipeline (OCaml)
 
-## Resume-focused project summary
+## Summary
 
 Built a **functional ETL framework in OCaml** that demonstrates production-style data engineering design:
 
