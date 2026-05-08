@@ -21,6 +21,7 @@ lib/
 test/
   test_row.ml
   test_column.ml
+  test_schema.ml
   test_transform.ml
   test_pipeline.ml
   test_csv_io.ml

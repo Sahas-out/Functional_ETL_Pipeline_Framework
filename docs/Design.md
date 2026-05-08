@@ -27,13 +27,13 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │                        ETL PIPELINE                             │
 │                                                                 │
-│  ┌──────────┐     ┌───────────────────────────┐     ┌────────┐ │
-│  │ EXTRACT  │────▶│        TRANSFORM          │────▶│  LOAD  │ │
-│  │          │     │  map ▸ filter ▸ reduce... │     │        │ │
-│  │ I/O side │     │  pure · lazy · composable │     │ I/O    │ │
-│  │  effect  │     │  Seq.t flows through here │     │ side   │ │
-│  │          │     │                           │     │ effect │ │
-│  └──────────┘     └───────────────────────────┘     └────────┘ │
+│  ┌──────────┐     ┌───────────────────────────┐     ┌────────┐  │
+│  │ EXTRACT  │────▶│        TRANSFORM          │────▶│  LOAD  │  │
+│  │          │     │  map ▸ filter ▸ reduce... │     │        │  │
+│  │ I/O side │     │  pure · lazy · composable │     │ I/O    │  │
+│  │  effect  │     │  Seq.t flows through here │     │ side   │  │
+│  │          │     │                           │     │ effect │  │
+│  └──────────┘     └───────────────────────────┘     └────────┘  │
 │       ▲                        ▲                        ▲       │
 │  User-defined            Library-provided          User-defined │
 │  or csv_extractor        combinators               or csv_loader│
@@ -49,7 +49,7 @@
 | Streaming            | `Seq.t` (lazy, pull-based)                      | Avoids loading entire dataset into memory        |
 | Error propagation    | `Result` monad threaded through pipeline        | Errors are values; no exceptions in pure core    |
 | Side effects         | Isolated in Extract and Load only               | Transform layer remains purely functional        |
-| Schema evolution     | Phantom types tag pipeline with schema          | Catches schema mismatches at compile time        |
+| Schema validation    | Runtime schema helpers via `Schema.t`           | Validates field presence and types explicitly    |
 
 ---
 
@@ -87,19 +87,17 @@ etl_lib/
 │   │
 │   └── etl.ml                   ← Top-level re-export / public API surface
 │
-├── examples/
-│   ├── sales_pipeline.ml         ← Demo: CSV → clean → aggregate → output CSV
-│   └── log_pipeline.ml           ← Demo: log file → filter errors → group by hour
-│
-├── bench/
-│   ├── functional_bench.ml       ← Functional pipeline benchmark
-│   └── imperative_bench.ml       ← Equivalent imperative pipeline benchmark
+├── pipelines/
+│   ├── functional_ocaml/         ← Functional pipeline example and entrypoint
+│   └── imperative_pandas/        ← Python/Pandas baseline pipeline
 │
 ├── test/
 │   ├── test_row.ml
 │   ├── test_column.ml
+│   ├── test_schema.ml
 │   ├── test_transform.ml
-│   └── test_pipeline.ml
+│   ├── test_pipeline.ml
+│   └── test_csv_io.ml
 │
 ├── dune-project
 ├── etl_lib.opam
@@ -217,7 +215,7 @@ The compiler pattern-matches on the constructor, determines `'a`, and the return
 
 ### 3.3 `Schema` — `lib/core/schema.ml`
 
-A schema is a runtime-inspectable list of `any_column`. Used by the CSV extractor to know which columns to parse, and for validation.
+A schema is a runtime-inspectable list of `any_column`. It provides validation helpers and field-name extraction; parsing is still driven by caller-provided parsers.
 
 ```ocaml
 (* schema.ml *)
@@ -238,7 +236,7 @@ val field_names : schema -> string list
 
 ### 3.4 `Pipeline` — `lib/pipeline/pipeline.ml`
 
-The pipeline is parameterised over its element type `'a`. The phantom type parameter `'schema` (when used) tracks what shape the rows have — but for simplicity the base pipeline is just `'a Seq.t`.
+The pipeline is parameterised over its element type `'a`. In the current implementation it is simply a thin wrapper over `'a Seq.t`.
 
 ```ocaml
 (* pipeline.ml *)
@@ -246,8 +244,7 @@ The pipeline is parameterised over its element type `'a`. The phantom type param
 (* A pipeline is just a lazy sequence — Seq.t is pull-based and memoisation-free *)
 type 'a pipeline = 'a Seq.t
 
-(* Compose two pipelines: feed output of one into input of the next *)
-(*   (▸) is left-to-right function application, like pipe operator  *)
+(* Compose two pipeline transformers *)
 val compose : ('a pipeline -> 'b pipeline) -> ('b pipeline -> 'c pipeline)
            -> ('a pipeline -> 'c pipeline)
 
@@ -266,8 +263,6 @@ The `|>` operator in OCaml serves naturally as the pipeline composition operator
 (* extractor.ml *)
 
 (* An extractor is any function that produces a pipeline of rows *)
-(* I/O happens inside here — the Seq.t it returns is lazy, so  *)
-(* file reads are deferred until the pipeline is consumed       *)
 type 'a extractor = unit -> 'a pipeline
 
 (* Helper to lift any sequence-producing function into an extractor *)
@@ -282,7 +277,6 @@ val make : (unit -> 'a Seq.t) -> 'a extractor
 (* loader.ml *)
 
 (* A loader consumes a pipeline — triggers all lazy evaluation  *)
-(* All I/O (file writes, network calls) happens inside here     *)
 type 'a loader = 'a pipeline -> unit
 
 (* Helper to build a loader from a per-element sink function *)
@@ -376,7 +370,7 @@ let set : type a. a column -> a -> row -> row =
 The user defines columns once, at the top of their pipeline file:
 
 ```ocaml
-(* User code — sales_pipeline.ml *)
+(* User code — pipelines/functional_ocaml/main.ml *)
 
 (* Column declarations — these are just values, not types *)
 let order_id   : string column = String "order_id"
@@ -442,29 +436,23 @@ let run (pipeline : 'a Seq.t) : unit =
 ```ocaml
 (* Full pipeline — types annotated for clarity *)
 
-let run_sales_pipeline () =
-  (* Extract: unit -> row result Seq.t *)
-  Csv_extractor.extract ~file:"sales.csv" ~schema:sales_schema
-
-  (* Transform stage 1: filter out bad rows *)
-  |> Transform.filter_ok                    (* drop Error rows, keep Ok rows *)
-  |> Transform.filter (fun row ->           (* pure predicate *)
-       match Column.get is_refund row with
-       | Ok true -> false
-       | _       -> true)
-
-  (* Transform stage 2: enrich *)
-  |> Transform.map enrich_row               (* row -> row result, via Result *)
-
-  (* Transform stage 3: aggregate *)
+let run_logs_pipeline ~input_file ~output_file =
+  Csv_extractor.extract
+    ~file:input_file
+    ~parser:Extract_raw_csv_logs.parser
+    ()
+  |> Transform.map Parse_request_field.apply
+  |> Transform.map Derive_date_and_hour.apply
+  |> Transform.map Categorize_endpoint_type.apply
   |> Transform.group_by_aggregate
-       ~key:(fun row -> Column.get_exn department row)
-       ~init:0.0
-       ~reduce:(fun acc row ->
-         acc +. Column.get_exn (Float "total") row)
-
-  (* Load: consumes the sequence, writes CSV *)
-  |> Csv_loader.load ~file:"output.csv"
+       ~key:(fun row -> int_of_string (Row.get_exn "request_hour" row))
+       ~init:Aggregate_hourly.init
+       ~reduce:Aggregate_hourly.reduce
+       ~emit:Aggregate_hourly.emit
+  |> Transform.filter_ok
+  |> Csv_loader.load
+       ~file:output_file
+       ~headers:Load_hourly_summary.output_headers
 ```
 
 ---
@@ -473,11 +461,11 @@ let run_sales_pipeline () =
 
 ### 6.1 User-Defined Extractor Interface
 
-Any function `unit -> row result Seq.t` qualifies as an extractor. Users can implement:
+Any function `unit -> 'a Seq.t` qualifies as an extractor. Users can implement:
 
 ```ocaml
 (* A custom JSON extractor (user-defined) *)
-let json_extractor ~file ~schema () : row result Seq.t =
+let json_extractor ~file () : row Seq.t =
   let ic = open_in file in
   let json_stream = Json_parser.stream_of_channel ic in
   Seq.map (fun json_obj ->
@@ -488,7 +476,7 @@ let json_extractor ~file ~schema () : row result Seq.t =
   ) json_stream
 ```
 
-The library does not care *how* data is produced — only that it arrives as `row result Seq.t`.
+The library does not care *how* data is produced — only that it arrives as a lazy sequence.
 
 ### 6.2 Built-in `Csv_extractor` — `lib/extract/csv_extractor.ml`
 
@@ -498,11 +486,11 @@ The library does not care *how* data is produced — only that it arrives as `ro
 (* extract : opens file, reads lazily line by line, uses user-provided parser *)
 val extract :
   file:string ->
-  ?delimiter:char ->          (* default: ',' *)
-  ?has_header:bool ->         (* default: true *)
-  parser:(string array -> row result) ->   (* USER provides the parser *)
+  ?delimiter:char ->
+  ?has_header:bool ->
+  parser:(string array -> (Row.t, string) result) ->
   unit ->
-  row result Seq.t
+  (Row.t, string) result Seq.t
 
 (*
   Internally:
@@ -558,11 +546,14 @@ All transforms live in `lib/pipeline/transform.ml`. Every function is **pure** a
 ```ocaml
 (* transform.ml *)
 
-(* Apply f to every element. f may return a result — errors propagate *)
-val map : ('a -> 'b) -> 'a Seq.t -> 'b Seq.t
+(* Apply f to every Ok value in a result stream *)
+val map : ('a -> 'b) -> ('a, 'e) result Seq.t -> ('b, 'e) result Seq.t
 
-(* Implementation: just Seq.map — laziness comes for free *)
-let map f seq = Seq.map f seq
+(* Implementation: preserve Error rows unchanged *)
+let map f seq =
+  Seq.map (function
+    | Ok value -> Ok (f value)
+    | Error err -> Error err) seq
 ```
 
 **Example:**
@@ -582,15 +573,20 @@ pipeline |> Transform.map add_total
 ### 7.2 `filter`
 
 ```ocaml
-val filter : ('a -> bool) -> 'a Seq.t -> 'a Seq.t
+val filter : ('a -> bool) -> ('a, 'e) result Seq.t -> ('a, 'e) result Seq.t
 
-let filter pred seq = Seq.filter pred seq
+let filter pred seq =
+  Seq.filter_map
+    (function
+      | Error err -> Some (Error err)
+      | Ok value -> if pred value then Some (Ok value) else None)
+    seq
 ```
 
 **Example:**
 
 ```ocaml
-(* Keep only rows where amount > 100.0 *)
+(* Keep only Ok rows where amount > 100.0 *)
 let is_large_order row =
   match Column.get amount row with
   | Ok v -> v > 100.0
@@ -602,8 +598,8 @@ pipeline |> Transform.filter is_large_order
 ### 7.3 `filter_ok` — Result-aware filter
 
 ```ocaml
-(* Drop all Error rows, unwrap Ok rows — bridges 'a result Seq.t to 'a Seq.t *)
-val filter_ok : 'a result Seq.t -> 'a Seq.t
+(* Drop all Error rows, unwrap Ok rows *)
+val filter_ok : ('a, 'e) result Seq.t -> 'a Seq.t
 
 let filter_ok seq =
   seq
@@ -620,10 +616,15 @@ let filter_ok seq =
 ### 7.4 `flat_map`
 
 ```ocaml
-(* Map each element to a sequence, then flatten all sequences together *)
-val flat_map : ('a -> 'b Seq.t) -> 'a Seq.t -> 'b Seq.t
+(* Map each Ok value to a sequence, then flatten all sequences together *)
+val flat_map : ('a -> 'b Seq.t) -> ('a, 'e) result Seq.t -> ('b, 'e) result Seq.t
 
-let flat_map f seq = Seq.flat_map f seq
+let flat_map f seq =
+  Seq.flat_map
+    (function
+      | Error err -> Seq.return (Error err)
+      | Ok value -> Seq.map (fun item -> Ok item) (f value))
+    seq
 ```
 
 **Example — explode multi-item orders into individual line items:**
@@ -648,11 +649,17 @@ pipeline |> Transform.flat_map explode_items
 ### 7.5 `reduce`
 
 ```ocaml
-(* Fold over the entire sequence — this is a terminal operation (forces evaluation) *)
-(* Returns a single accumulated value                                               *)
-val reduce : ('acc -> 'a -> 'acc) -> 'acc -> 'a Seq.t -> 'acc
+(* Fold over the entire result sequence — terminal operation *)
+val reduce : ('acc -> 'a -> 'acc) -> 'acc -> ('a, 'e) result Seq.t -> ('acc, 'e) result
 
-let reduce f init seq = Seq.fold_left f init seq
+let reduce f init seq =
+  let rec go acc current =
+    match current () with
+    | Seq.Nil -> Ok acc
+    | Seq.Cons (Error err, _) -> Error err
+    | Seq.Cons (Ok value, tail) -> go (f acc value) tail
+  in
+  go init seq
 ```
 
 **Important:** `reduce` is **strict** — it must consume the whole sequence to produce a result. All lazy stages upstream are forced at this point.
@@ -694,12 +701,12 @@ csv → parse → filter → map ────▶ group_by ──▶ map → load
 
 ```ocaml
 val group_by_aggregate :
-  key:('a -> 'k) ->             (* extract the grouping key from a row *)
-  init:'acc ->                  (* initial accumulator per group        *)
-  reduce:('acc -> 'a -> 'acc) ->  (* fold: how to combine row into acc  *)
-  emit:('k -> 'acc -> 'b) ->    (* produce an output element per group  *)
-  'a Seq.t ->
-  'b Seq.t
+  key:('a -> 'k) ->
+  init:'acc ->
+  reduce:('acc -> 'a -> 'acc) ->
+  emit:('k -> 'acc -> 'b) ->
+  ('a, 'e) result Seq.t ->
+  ('b, 'e) result Seq.t
 
 
 (* Pseudocode implementation *)
@@ -711,12 +718,15 @@ let group_by_aggregate ~key ~init ~reduce ~emit seq =
   let group_map =
     Seq.fold_left
       (fun acc_map element ->
-        let k = key element in
-        let current = match Map.find_opt k acc_map with
-          | None   -> init
-          | Some v -> v
-        in
-        Map.add k (reduce current element) acc_map)
+        match element with
+        | Error _ -> acc_map
+        | Ok value ->
+            let k = key value in
+            let current = match Map.find_opt k acc_map with
+              | None   -> init
+              | Some v -> v
+            in
+            Map.add k (reduce current value) acc_map)
       Map.empty
       seq
   in
@@ -724,7 +734,7 @@ let group_by_aggregate ~key ~init ~reduce ~emit seq =
   (* === EMIT PHASE (lazy again) ===
      Convert the map's bindings into a new lazy sequence.           *)
   Map.to_seq group_map
-  |> Seq.map (fun (k, acc) -> emit k acc)
+  |> Seq.map (fun (k, acc) -> Ok (emit k acc))
 ```
 
 **Example — total sales per department:**
@@ -892,27 +902,13 @@ After the grouping key is computed, each group's `reduce` is completely independ
 - Memory: O(1) row in memory at any time during map/filter (before group_by barrier)
 - Throughput: One file-read syscall per line, one write syscall per line
 
-### Imperative Baseline (`bench/imperative_bench.ml`)
+### Imperative Baseline (`pipelines/imperative_pandas/pipeline.py`)
 
 ```ocaml
 (* Equivalent imperative pipeline for comparison *)
 let run_imperative ~input ~output =
-  let ic = open_in input in
-  let oc = open_out output in
-  let total = ref 0.0 in         (* mutable accumulator *)
-  let rows  = ref [] in          (* mutable list — loads all data *)
-  try while true do
-    let line = input_line ic in
-    let fields = String.split_on_char ',' line in
-    let amount = float_of_string (List.nth fields 1) in
-    if amount > 100.0 then begin
-      total := !total +. amount;
-      rows := line :: !rows      (* in-memory accumulation *)
-    end
-  done with End_of_file ->
-  List.iter (output_string oc) !rows;
-  close_in ic; close_out oc;
-  !total
+  ignore input;
+  ignore output
 ```
 
 ### Metrics to Collect
@@ -932,85 +928,33 @@ let run_imperative ~input ~output =
 
 ## 13. End-to-End Example
 
-**Scenario:** Process `sales.csv`, remove refunds, compute order totals, aggregate by department, write `summary.csv`.
+**Scenario:** Process NASA logs, derive request metadata, aggregate by hour, write `hourly_summary.csv`.
 
 ```
-sales.csv
-  order_id, amount, quantity, is_refund, department
-  1001,     29.99,  3,        false,     electronics
-  1002,     9.99,   1,        true,      books
-  1003,     49.99,  2,        false,     electronics
-  1004,     5.00,   4,        false,     books
+nasa_aug95_c.csv
+  requesting_host,datetime,request,status,response_size
+  example.com,01/Aug/1995:00:00:01 -0400,GET / HTTP/1.0,200,1024
+  example.com,01/Aug/1995:00:15:42 -0400,GET /image.png HTTP/1.0,200,2048
 ```
 
 ```ocaml
-(* examples/sales_pipeline.ml *)
+(* pipelines/functional_ocaml/main.ml *)
 
-(* Step 1: Declare column descriptors *)
-let order_id   = Column.String "order_id"
-let amount     = Column.Float  "amount"
-let quantity   = Column.Int    "quantity"
-let is_refund  = Column.Bool   "is_refund"
-let department = Column.String "department"
-
-(* Step 2: Define the row parser (user-provided) *)
-let sales_parser fields =
-  if Array.length fields <> 5 then Error "wrong field count"
-  else
-    let raw = Row.of_array
-      [|"order_id";"amount";"quantity";"is_refund";"department"|]
-      fields
-    in
-    Column.get amount    raw >>= fun _ ->
-    Column.get quantity  raw >>= fun _ ->
-    Column.get is_refund raw >>= fun _ ->
-    Ok raw
-
-(* Step 3: Transformation functions *)
-let remove_refunds row =
-  match Column.get is_refund row with
-  | Ok true -> false
-  | _       -> true
-
-let add_total row =
-  Column.get amount   row >>= fun amt ->
-  Column.get quantity row >>= fun qty ->
-  Ok (Column.set (Column.Float "total") (amt *. float_of_int qty) row)
-
-(* Step 4: Wire up the pipeline — reads as a sentence *)
-let () =
-  Csv_extractor.extract
-    ~file:"sales.csv"
-    ~parser:sales_parser
-    ()
-  |> Transform.filter_ok
-  |> Transform.filter remove_refunds
-  |> Transform.map add_total
-  |> Transform.filter_ok
+let run ~input_file ~output_file =
+  Csv_extractor.extract ~file:input_file ~parser:Extract_raw_csv_logs.parser ()
+  |> Transform.map Parse_request_field.apply
+  |> Transform.map Derive_date_and_hour.apply
+  |> Transform.map Categorize_endpoint_type.apply
   |> Transform.group_by_aggregate
-       ~key:(fun row -> Column.get_exn department row)
-       ~init:{ count = 0; revenue = 0.0 }
-       ~reduce:(fun acc row ->
-         { count   = acc.count + 1
-         ; revenue = acc.revenue +. Column.get_exn (Column.Float "total") row })
-       ~emit:(fun dept acc ->
-         Row.empty
-         |> Row.set "department"   dept
-         |> Row.set "order_count"  (string_of_int acc.count)
-         |> Row.set "total_revenue" (string_of_float acc.revenue))
-  |> Csv_loader.load
-       ~file:"summary.csv"
-       ~headers:["department"; "order_count"; "total_revenue"]
-
-(*
-  Output: summary.csv
-    department,  order_count, total_revenue
-    electronics, 2,           189.95
-    books,       1,           20.00
-*)
+       ~key:(fun row -> int_of_string (Row.get_exn "request_hour" row))
+       ~init:Aggregate_hourly.init
+       ~reduce:Aggregate_hourly.reduce
+       ~emit:Aggregate_hourly.emit
+  |> Transform.filter_ok
+  |> Csv_loader.load ~file:output_file ~headers:Load_hourly_summary.output_headers
 ```
 
-The pipeline definition reads declaratively top-to-bottom. No mutation, no exceptions, no full-dataset loading. Each `|>` adds one lazy transformation; the whole thing executes only when `Csv_loader.load` pulls the first element.
+The current example pipeline reads declaratively top-to-bottom. It stays lazy until the loader consumes the final sequence.
 
 ---
 

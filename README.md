@@ -35,13 +35,11 @@ Library modules in `lib/`:
 - `etl.ml`
   - top-level API re-exports
 
-Tests are under `test/` for core modules, transforms, pipeline composition, and CSV I/O behavior.
+Tests are under `test/` for core modules, schema validation, transforms, pipeline composition, and CSV I/O behavior.
 
 ## Scope notes
 
-Per current project direction, this implementation intentionally **excludes**:
-1. End-to-end example pipeline under `examples/`
-2. Imperative-vs-functional benchmark comparison
+The repo keeps the runnable example pipeline in `pipelines/functional_ocaml/` and the imperative baseline in `pipelines/imperative_pandas/`; there is no separate `examples/` or `bench/` tree.
 
 ## How to run pipelines and capture metrics
 
