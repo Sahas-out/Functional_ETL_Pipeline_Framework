@@ -1,0 +1,207 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+
+\hypersetup{colorlinks=true, urlcolor=blue, linkcolor=black}
+\setlist[itemize]{leftmargin=*, itemsep=2pt, topsep=2pt}
+
+\lstdefinestyle{compact}{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  frame=single,
+  columns=fullflexible
+}
+
+\title{Project Deliverable Report\\Functional ETL Framework in OCaml}
+\author{
+  Team Members: \\
+  [Member 1 Name] -- [Roll Number] \\
+  [Member 2 Name] -- [Roll Number] \\
+  [Member 3 Name] -- [Roll Number] \\
+  Repository: \url{[GitHub-Repo-Link]}
+}
+\date{Programming Languages Course}
+
+\begin{document}
+\maketitle
+\vspace{-1em}
+
+\section{Project Focus}
+This project is a \textbf{reusable ETL framework}, not only a single pipeline implementation. The core contribution is a typed, composable, lazy ETL engine in OCaml with clear effect boundaries:
+\begin{itemize}
+  \item \textbf{Core ADTs}: immutable row model and typed column descriptors.
+  \item \textbf{Transform algebra}: reusable operators over streams.
+  \item \textbf{Boundary isolation}: file I/O is confined to extract/load modules.
+\end{itemize}
+
+\section{Framework Architecture}
+\subsection*{Module-level architecture}
+\begin{itemize}
+  \item \texttt{core/}: \texttt{Row}, \texttt{Column} (GADT), \texttt{Schema}
+  \item \texttt{pipeline/}: \texttt{Pipeline}, \texttt{Transform}
+  \item \texttt{extract/}: extractor abstraction + CSV extractor
+  \item \texttt{load/}: loader abstraction + CSV loader
+\end{itemize}
+
+\begin{lstlisting}[style=compact]
+CSV Input
+  -> Extractor (lazy Seq.t of (Row.t, string) result)
+  -> Transform operators (pure, composable)
+  -> Loader (writes selected rows to output)
+\end{lstlisting}
+
+\subsection*{Data flow semantics}
+The framework uses pull-based streams (\texttt{Seq.t}). Each stage describes transformation logic without executing it immediately; evaluation happens when the sequence is consumed by the loader/run boundary.
+
+\section{Abstract Data Types and Type Safety}
+\subsection*{Row as immutable ADT}
+\texttt{Row.t} is an immutable map from field names to string values. This avoids hidden mutation across stages and makes transform composition deterministic.
+
+\subsection*{GADT-based typed columns}
+The \texttt{Column} ADT encodes column type at the constructor level:
+\begin{lstlisting}[style=compact, language=Caml]
+type 'a t =
+  | String : string -> string t
+  | Int    : string -> int t
+  | Float  : string -> float t
+  | Bool   : string -> bool t
+  | Option : 'a t -> 'a option t
+\end{lstlisting}
+
+Typed getters then produce compile-time-directed result types:
+\begin{lstlisting}[style=compact, language=Caml]
+(* get (Int "status_code") row : (int, string) result *)
+let rec get : type a. a t -> Row.t -> (a, string) result = ...
+\end{lstlisting}
+
+\textbf{Impact on framework quality:}
+\begin{itemize}
+  \item Fewer ad-hoc casts in user pipelines.
+  \item Parsing/type mismatch surfaced explicitly as typed errors.
+  \item Safer schema-driven transformations.
+\end{itemize}
+
+\section{Lazy Evaluation: Implementation and Benefit}
+Lazy execution is implemented directly in the extractor and transform layers. The extractor returns a sequence node-by-node:
+\begin{lstlisting}[style=compact, language=Caml]
+let rec stream () =
+  match input_line ic with
+  | line ->
+      let fields = split_line ~delimiter line in
+      let parsed = parser fields in
+      Seq.Cons (parsed, stream)
+  | exception End_of_file -> Seq.Nil
+\end{lstlisting}
+
+Transform operators preserve laziness by constructing new \texttt{Seq} producers:
+\begin{lstlisting}[style=compact, language=Caml]
+let map f seq =
+  let rec next s () =
+    match s () with
+    | Seq.Nil -> Seq.Nil
+    | Seq.Cons (Ok v, t) -> Seq.Cons (Ok (f v), next t)
+    | Seq.Cons (Error e, t) -> Seq.Cons (Error e, next t)
+  in next seq
+\end{lstlisting}
+
+\textbf{Why this matters:} the framework can process large inputs incrementally and avoids mandatory full materialization at each stage.
+
+\section{Monad Usage and Error Propagation}
+The framework models row-level failures with \texttt{('a, string) result}. This follows the Result-monad style: successful values proceed as \texttt{Ok}, failures remain \texttt{Error} values in the stream.
+
+\begin{lstlisting}[style=compact, language=Caml]
+| Seq.Cons (Ok value, tail) -> Seq.Cons (Ok (f value), next tail)
+| Seq.Cons (Error err, tail) -> Seq.Cons (Error err, next tail)
+\end{lstlisting}
+
+\textbf{Monadic behavior in practice:}
+\begin{itemize}
+  \item \texttt{map}: transforms only successful rows.
+  \item \texttt{filter}: applies predicate only on successful rows.
+  \item \texttt{reduce}: can terminate with first propagated error.
+\end{itemize}
+
+This design avoids exception-heavy control flow and makes error handling explicit in the framework contract.
+
+\section{Bad Row Handling Behavior}
+Bad rows (parse failures, malformed fields, missing values) are represented as \texttt{Error} elements and are not silently mutated into valid rows.
+
+\subsection*{How bad rows are handled}
+\begin{itemize}
+  \item Extract parser failures become \texttt{Error "..."} records.
+  \item Transform stages propagate errors unless a filtering operation is used.
+  \item Loader behavior is configurable by stream shape; result-aware loading can skip error rows and write valid output rows.
+\end{itemize}
+
+\begin{lstlisting}[style=compact, language=Caml]
+let filter_ok seq =
+  let rec next s () =
+    match s () with
+    | Seq.Nil -> Seq.Nil
+    | Seq.Cons (Ok v, t) -> Seq.Cons (v, next t)
+    | Seq.Cons (Error _, t) -> next t ()
+  in next seq
+\end{lstlisting}
+
+\textbf{Framework-level takeaway:} bad-row policy is explicit and stage-controlled, which makes behavior predictable and auditable.
+
+\section{Transform Operations in the Framework}
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{p{2.3cm}p{4.0cm}p{6.4cm}}
+\toprule
+\textbf{Operator} & \textbf{Data-shape effect} & \textbf{Role in framework} \\
+\midrule
+\texttt{map} & 1 row $\rightarrow$ 1 row & Derivation/enrichment of fields. \\
+\texttt{filter} & 1 row $\rightarrow$ 0/1 row & Data quality and business-rule enforcement. \\
+\texttt{flat\_map} & 1 row $\rightarrow$ N rows & Event expansion and normalization patterns. \\
+\texttt{reduce} & stream $\rightarrow$ scalar & Terminal summary computation. \\
+\texttt{group\_by\_aggregate} & stream $\rightarrow$ grouped rows & Batch/materialized aggregation barrier. \\
+\texttt{filter\_ok} & result-stream $\rightarrow$ value-stream & Controlled elimination of failed rows. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Comparative Metrics (Functional vs Imperative Baseline)}
+To validate framework outcomes on realistic input sizes, recorded metrics in \texttt{metrics/} were compared for 166 MB (1x) and 1.6 GB (10x) datasets.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Approach} & \textbf{Data Size} & \textbf{Elapsed (s)} & \textbf{Max RSS (KB)} & \textbf{Max RSS (GB)} \\
+\midrule
+Functional (OCaml) & 166 MB & 2.72 & 29,312 & 0.028 \\
+Imperative (Pandas) & 166 MB & 14.37 & 1,090,288 & 1.040 \\
+Functional (OCaml) & 1.6 GB & 15.02 & 1,692,160 & 1.614 \\
+Imperative (Pandas) & 1.6 GB & 140.71 & 10,215,920 & 9.742 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Interpretation:} while the project goal is framework design, measured runs indicate the functional framework implementation is efficient in both runtime and memory across larger input sizes.
+
+\section{Conclusion and Learning}
+This project delivered a functional ETL \textbf{framework} with reusable abstractions rather than a one-off script. Key learning outcomes:
+\begin{itemize}
+  \item ADTs and GADTs can encode data contracts directly in types.
+  \item Result-monad style error handling improves clarity of failure paths.
+  \item Lazy streams (\texttt{Seq.t}) enable scalable dataflow with controlled evaluation.
+  \item Explicit bad-row handling policies improve reliability in ETL systems.
+\end{itemize}
+Overall, the team learned how programming-language concepts (types, ADTs, purity, monadic error flow, laziness) can be translated into practical framework engineering decisions.
+
+\section*{References}
+\begin{enumerate}
+  \item \url{https://ocaml.org/docs/sequences}
+  \item \url{https://ocaml.org/manual/5.4/gadts-tutorial.html}
+  \item \url{https://medium.com/@dpkgnair/functional-patterns-for-composing-etl-pipeline-stages-73ecafa3b2a1}
+\end{enumerate}
+
+\end{document}

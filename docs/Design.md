@@ -82,7 +82,7 @@ etl_lib/
 │   ├── load/
 │   │   ├── loader.ml             ← Loader type + user-defined loader interface
 │   │   ├── loader.mli
-│   │   ├── csv_loader.ml         ← Built-in CSV writer, consumes Seq.t
+│   │   ├── csv_loader.ml         ← Result-aware CSV writer (+ strict variant in same module)
 │   │   └── csv_loader.mli
 │   │
 │   └── etl.ml                   ← Top-level re-export / public API surface
@@ -411,7 +411,7 @@ Each `Seq.t` is a thunk — calling it produces either the end of the stream or 
 csv_extractor ──▶ parse ──▶ filter ──▶ map ──▶ csv_loader
      │               │         │        │           │
      └───────────────┴─────────┴────────┴───────────┘
-           Nothing happens until csv_loader pulls the first element
+           Nothing happens until Pipeline.run pulls the first element
 ```
 
 ### 5.2 Pipeline Composition
@@ -425,10 +425,9 @@ let compose f g = fun source -> g (f source)
 (* The |> operator naturally threads pipelines: *)
 (*   source |> stage1 |> stage2 |> stage3       *)
 
-(* run : force full evaluation (used by the loader internally) *)
+(* run : force full evaluation *)
 let run (pipeline : 'a Seq.t) : unit =
   Seq.iter (fun _ -> ()) pipeline
-  (* Loaders use Seq.iter with a real sink function instead *)
 ```
 
 ### 5.3 Full Pipeline Shape
@@ -449,10 +448,10 @@ let run_logs_pipeline ~input_file ~output_file =
        ~init:Aggregate_hourly.init
        ~reduce:Aggregate_hourly.reduce
        ~emit:Aggregate_hourly.emit
-  |> Transform.filter_ok
   |> Csv_loader.load
-       ~file:output_file
-       ~headers:Load_hourly_summary.output_headers
+        ~file:output_file
+        ~headers:Load_hourly_summary.output_headers
+  |> Pipeline.run
 ```
 
 ---
@@ -783,28 +782,19 @@ val load :
   file:string ->
   ?delimiter:char ->
   headers:string list ->      (* which fields to write and in what order *)
-  row Seq.t ->
-  unit
+  (row, string) result Seq.t ->
+  unit Pipeline.t
 
 (*
   Pseudocode:
 
   let load ~file ?(delimiter=',') ~headers pipeline =
-    let oc = open_out file in
-    (* Write header line *)
-    output_string oc (String.concat (String.make 1 delimiter) headers ^ "\n");
-    (* Write one line per row — pulls from Seq one element at a time *)
-    Seq.iter (fun row ->
-      let values = List.map (fun h ->
-        match Row.get h row with
-        | None   -> ""
-        | Some v -> csv_escape v delimiter
-      ) headers in
-      output_string oc (String.concat (String.make 1 delimiter) values ^ "\n")
-    ) pipeline;
-    close_out oc
+    let rows_only = filter_ok_rows pipeline in
+    Csv_loader.load_strict ~file ~delimiter ~headers rows_only
 *)
 ```
+
+`Csv_loader.load` skips error rows; `Csv_loader.load_strict` accepts only `row Seq.t`.
 
 ---
 
@@ -839,7 +829,7 @@ let ( >|= ) : 'a result -> ('a -> 'b) -> 'b result =
 The pipeline carries `row result Seq.t` through the transform stages. Each transform either:
 - Propagates errors untouched (`Error e -> Error e`)
 - Introduces new errors from parse failures
-- Filters errors out explicitly with `filter_ok`
+- Optionally filters errors out with `filter_ok`
 
 ```
 Extract          Transform             Load
@@ -950,8 +940,8 @@ let run ~input_file ~output_file =
        ~init:Aggregate_hourly.init
        ~reduce:Aggregate_hourly.reduce
        ~emit:Aggregate_hourly.emit
-  |> Transform.filter_ok
   |> Csv_loader.load ~file:output_file ~headers:Load_hourly_summary.output_headers
+  |> Pipeline.run
 ```
 
 The current example pipeline reads declaratively top-to-bottom. It stays lazy until the loader consumes the final sequence.

@@ -67,7 +67,9 @@ test/
 - Propagates parsing output as values in stream.
 
 ### CSV loader
-- Writes headers first, then streams rows incrementally.
+- `Csv_loader.load` accepts `result` streams, skips `Error` rows, and returns a lazy `unit Pipeline.t`.
+- `Csv_loader.load_strict` keeps strict good-row input (`Row.t Seq.t`) and also returns a lazy `unit Pipeline.t`.
+- Execution is forced at `Pipeline.run`, not inside loader implementations.
 - Missing row fields serialize as empty strings.
 - Handles CSV escaping for delimiters, quotes, and line breaks.
 

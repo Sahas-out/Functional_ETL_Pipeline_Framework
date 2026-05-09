@@ -51,7 +51,18 @@ let () =
       in
       assert strict_raised;
 
-      Csv_loader.load ~file:output ~headers:[ "name"; "amount" ] (List.to_seq first_two);
+      List.to_seq first_two
+      |> Csv_loader.load_strict ~file:output ~headers:[ "name"; "amount" ]
+      |> Pipeline.run;
 
       let loaded = Csv_extractor.extract ~file:output ~parser () |> Transform.filter_ok |> take 2 in
-      assert (List.length loaded = 2))
+      assert (List.length loaded = 2);
+
+      Csv_extractor.extract ~file:input ~parser:parser_raising ()
+      |> Csv_loader.load ~file:output ~headers:[ "name"; "amount" ]
+      |> Pipeline.run;
+
+      let loaded_after_skip =
+        Csv_extractor.extract ~file:output ~parser () |> Transform.filter_ok |> take 2
+      in
+      assert (List.length loaded_after_skip = 2))

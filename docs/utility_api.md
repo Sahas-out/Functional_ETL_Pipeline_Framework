@@ -272,8 +272,8 @@ load
   ~file:string
   ?delimiter:char
   ~headers:string list
-  row Seq.t
-  -> unit
+  (row, string) result Seq.t
+  -> unit Pipeline.t
 ```
 
 ### Parameters
@@ -281,9 +281,9 @@ load
 * `~file` : output CSV path
 * `?delimiter` : separator (default `,`)
 * `~headers` : CSV column order
-* rows : sequence of rows
+* rows : sequence of `Ok row` / `Error "..."`
 
-Missing fields become empty strings.
+`Error` rows are skipped. Missing fields in `Ok` rows become empty strings.
 
 ---
 
@@ -294,6 +294,7 @@ load
   ~file:"out.csv"
   ~headers:["name"; "age"]
   rows
+|> Pipeline.run
 ```
 
 Output:
@@ -317,7 +318,7 @@ let rows =
   |> Transform.filter (fun (_,age) -> age >= 18)
 ```
 
-Then save transformed data using loader.
+Then save transformed data using loader and force execution with `Pipeline.run`.
 
 ---
 
@@ -327,10 +328,10 @@ Then save transformed data using loader.
 | --------- | ------------------------------------- |
 | Extractor | `extract` returns `Error` rows; `extract_strict` raises parser exceptions |
 | Transform | User-defined (exceptions or `result`) |
-| Loader    | Raises on write errors                |
+| Loader    | `Csv_loader.load` skips `Error` rows; `Csv_loader.load_strict` expects good rows |
 
 ---
 
 # Recommended Usage Pattern
 
-Use `result` rows with default transforms; use `*_strict` only for plain streams.
+Use `result` rows with default transforms and `Csv_loader.load`; use `Csv_loader.load_strict` only for plain good-row streams.

@@ -10,7 +10,6 @@ let run ~input_file ~output_file =
        ~init:Aggregate_hourly.init
        ~reduce:Aggregate_hourly.reduce
        ~emit:Aggregate_hourly.emit
-  |> Transform.filter_ok
   |> Csv_loader.load ~file:output_file ~headers:Load_hourly_summary.output_headers
 
 let () =
@@ -20,9 +19,8 @@ let () =
   let output_file =
     if Array.length Sys.argv > 2 then Sys.argv.(2) else "data/hourly_summary_functional.csv"
   in
-  let _ = run ~input_file ~output_file
-  in 
+  run ~input_file ~output_file |> Pipeline.run;
   let s = Gc.stat () in
-    Printf.printf "Minor collections: %d\n" s.minor_collections;
-    Printf.printf "Major collections: %d\n" s.major_collections;
-    Printf.printf "Heap words: %d\n" s.heap_words;
+  Printf.printf "Minor collections: %d\n" s.minor_collections;
+  Printf.printf "Major collections: %d\n" s.major_collections;
+  Printf.printf "Heap words: %d\n" s.heap_words
